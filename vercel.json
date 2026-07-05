@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/", "destination": "/Dental_Practices_Heatmap.html" }
+  ]
+}
