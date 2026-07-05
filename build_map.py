@@ -302,7 +302,7 @@ function renderSearchResults(query) {{
 
 function goToPractice(lat, lon, name, address) {{
   searchResultLayer.clearLayers();
-  map.flyTo([lat, lon], 16, {{ duration: 1.2 }});
+  map.setView([lat, lon], 16);
   L.marker([lat, lon]).addTo(searchResultLayer)
     .bindPopup(`<b>${{escapeHtml(name)}}</b>${{address ? '<br>' + escapeHtml(address) : ''}}`)
     .openPopup();
