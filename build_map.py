@@ -30,6 +30,24 @@ HTML_TEMPLATE = """<!doctype html>
   }}
   #legend {{ top:70px; right:12px; width:250px; max-height:calc(100vh - 100px); overflow-y:auto; }}
   #controls {{ top:70px; left:12px; width:210px; }}
+  #search-box-wrap {{ position:relative; margin-bottom:4px; }}
+  #search-input {{
+    width:100%; box-sizing:border-box; padding:7px 26px 7px 9px; font-size:13px;
+    border:1px solid #d8d5cd; border-radius:6px; outline:none; font-family:inherit;
+  }}
+  #search-input:focus {{ border-color:#2a78d6; }}
+  #clear-search-marker {{
+    display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%);
+    width:20px; height:20px; border:none; border-radius:50%; background:transparent;
+    color:#898781; font-size:16px; line-height:1; cursor:pointer;
+  }}
+  #clear-search-marker:hover {{ background:#f4f2ee; color:#1a1a1a; }}
+  #search-results:not(:empty) {{ margin-bottom:8px; max-height:220px; overflow-y:auto; }}
+  .search-result {{ padding:6px 8px; border-radius:6px; cursor:pointer; }}
+  .search-result:hover {{ background:#f4f2ee; }}
+  .sr-name {{ font-weight:600; color:#1a1a1a; font-size:12.5px; }}
+  .sr-addr {{ color:#82807a; font-size:11.5px; }}
+  .search-empty {{ padding:6px 8px; color:#898781; font-size:12px; }}
   .panel h3 {{ margin:0 0 8px 0; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:#52514e; }}
   .row {{ display:flex; align-items:center; gap:8px; margin:5px 0; cursor:pointer; user-select:none; }}
   .swatch {{ width:13px; height:13px; border-radius:50%; flex:none; border:1px solid rgba(0,0,0,0.15); }}
@@ -89,6 +107,11 @@ HTML_TEMPLATE = """<!doctype html>
   <div class="grad-bar"></div>
   <div class="grad-labels"><span>fewer practices</span><span>denser</span></div>
   <h3 style="margin-top:14px;">Proposed rep territories</h3>
+  <div id="search-box-wrap">
+    <input type="text" id="search-input" placeholder="Search practice name...">
+    <button id="clear-search-marker" title="Remove pin (keeps current zoom)">&times;</button>
+  </div>
+  <div id="search-results"></div>
   <div id="rep-legend"></div>
 </div>
 
@@ -239,6 +262,76 @@ document.getElementById('toggle-points').addEventListener('change', (e) => {{
 }});
 document.getElementById('toggle-reps').addEventListener('change', (e) => {{
   e.target.checked ? repsLayer.addTo(map) : map.removeLayer(repsLayer);
+}});
+
+// ---- Practice name search ----
+const searchInput = document.getElementById('search-input');
+const searchResultsEl = document.getElementById('search-results');
+const clearMarkerBtn = document.getElementById('clear-search-marker');
+const searchResultLayer = L.layerGroup().addTo(map);
+
+function renderSearchResults(query) {{
+  searchResultsEl.innerHTML = '';
+  const q = query.trim().toLowerCase();
+  if (q.length < 2) return;
+
+  const matches = [];
+  for (const p of MAP_DATA.points) {{
+    if (p[3] && p[3].toLowerCase().includes(q)) {{
+      matches.push(p);
+      if (matches.length >= 12) break;
+    }}
+  }}
+
+  if (matches.length === 0) {{
+    const empty = document.createElement('div');
+    empty.className = 'search-empty';
+    empty.textContent = 'No practices found';
+    searchResultsEl.appendChild(empty);
+    return;
+  }}
+
+  matches.forEach(([lat, lon, ri, name, address]) => {{
+    const item = document.createElement('div');
+    item.className = 'search-result';
+    item.innerHTML = `<div class="sr-name">${{escapeHtml(name)}}</div><div class="sr-addr">${{escapeHtml(address || '')}}</div>`;
+    item.addEventListener('click', () => goToPractice(lat, lon, name, address));
+    searchResultsEl.appendChild(item);
+  }});
+}}
+
+function goToPractice(lat, lon, name, address) {{
+  searchResultLayer.clearLayers();
+  map.setView([lat, lon], 16);
+  L.marker([lat, lon]).addTo(searchResultLayer)
+    .bindPopup(`<b>${{escapeHtml(name)}}</b>${{address ? '<br>' + escapeHtml(address) : ''}}`)
+    .openPopup();
+  searchResultsEl.innerHTML = '';
+  searchInput.value = name;
+  clearMarkerBtn.style.display = 'block';
+}}
+
+// Removes the search pin only -- deliberately does NOT touch map.setView, so the
+// map stays at whatever zoom/position the search left it at.
+clearMarkerBtn.addEventListener('click', () => {{
+  searchResultLayer.clearLayers();
+  searchInput.value = '';
+  searchResultsEl.innerHTML = '';
+  clearMarkerBtn.style.display = 'none';
+}});
+
+searchInput.addEventListener('input', (e) => {{
+  renderSearchResults(e.target.value);
+  if (e.target.value.trim() === '') {{
+    searchResultLayer.clearLayers();
+    clearMarkerBtn.style.display = 'none';
+  }}
+}});
+searchInput.addEventListener('focus', (e) => renderSearchResults(e.target.value));
+document.addEventListener('click', (e) => {{
+  if (e.target !== searchInput && !searchResultsEl.contains(e.target)) {{
+    searchResultsEl.innerHTML = '';
+  }}
 }});
 </script>
 </body>
