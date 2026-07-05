@@ -13,7 +13,7 @@ HTML_TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <title>DMG Dental Practices — England Heatmap & Rep Territory Plan</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="vendor/leaflet.css" />
 <style>
   html, body {{ margin:0; padding:0; height:100%; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }}
   #map {{ position:absolute; top:56px; bottom:0; left:0; right:0; }}
@@ -127,8 +127,8 @@ HTML_TEMPLATE = """<!doctype html>
   <div id="rep-legend"></div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/leaflet-heat.js"></script>
 <script>
 const MAP_DATA = {map_data_json};
 const POSTCODE_AREAS = {postcode_areas_json};
