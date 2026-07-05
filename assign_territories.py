@@ -62,8 +62,8 @@ AREA_OVERRIDES = {
     # apart from the rest of the area, which the area-level optimizer sent to Reading.
     # Keep the whole area with the London rep instead.
     "SE": 4,
-    # Explicit requests (2026-07-05): NN to Solihull/red, PO to Somerset/yellow.
-    "NN": 1, "PO": 3,
+    # Explicit requests (2026-07-05): NN to Solihull/red, PO/SP/SN to Somerset/yellow.
+    "NN": 1, "PO": 3, "SP": 3, "SN": 3,
 }
 
 CHESTERFIELD_LAT = 53.2350
