@@ -13,7 +13,7 @@ HTML_TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <title>DMG Dental Practices — England Heatmap & Rep Territory Plan</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="vendor/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   html, body {{ margin:0; padding:0; height:100%; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }}
   #map {{ position:absolute; top:56px; bottom:0; left:0; right:0; }}
@@ -48,16 +48,6 @@ HTML_TEMPLATE = """<!doctype html>
   .sr-name {{ font-weight:600; color:#1a1a1a; font-size:12.5px; }}
   .sr-addr {{ color:#82807a; font-size:11.5px; }}
   .search-empty {{ padding:6px 8px; color:#898781; font-size:12px; }}
-  #loading-overlay {{
-    position:fixed; inset:0; z-index:5000; background:#14181f; color:#fff;
-    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
-    font-size:14px;
-  }}
-  .spinner {{
-    width:34px; height:34px; border-radius:50%; border:3px solid rgba(255,255,255,0.25);
-    border-top-color:#fff; animation:spin .8s linear infinite;
-  }}
-  @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
   .panel h3 {{ margin:0 0 8px 0; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:#52514e; }}
   .row {{ display:flex; align-items:center; gap:8px; margin:5px 0; cursor:pointer; user-select:none; }}
   .swatch {{ width:13px; height:13px; border-radius:50%; flex:none; border:1px solid rgba(0,0,0,0.15); }}
@@ -94,8 +84,6 @@ HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
 
-<div id="loading-overlay"><div class="spinner"></div>Loading map&hellip;</div>
-
 <div id="topbar">
   <h1>England Dental Practices — Density &amp; 5-Rep Territory Plan</h1>
 </div>
@@ -127,21 +115,14 @@ HTML_TEMPLATE = """<!doctype html>
   <div id="rep-legend"></div>
 </div>
 
-<script src="vendor/leaflet.js"></script>
-<script src="vendor/leaflet-heat.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>
 const MAP_DATA = {map_data_json};
 const POSTCODE_AREAS = {postcode_areas_json};
 
 const REP_COLORS = ["#2a78d6", "#e34948", "#1baf7a", "#eda100", "#4a3aa7"];
 const ORPHAN_COLOR = "#9a9890";
-
-// Deferred one tick so the browser actually paints #loading-overlay before this
-// heavy synchronous setup runs (a blocking <script> can otherwise suppress the
-// first paint entirely, making the overlay never visibly appear).
-setTimeout(initMap, 0);
-
-function initMap() {{
 
 const map = L.map('map', {{ preferCanvas: true }}).setView([52.9, -1.6], 6);
 
@@ -169,59 +150,51 @@ const heatLayer = L.heatLayer(heatPoints, {{
   gradient: {{ 0.15: '#2a78d6', 0.4: '#5598e7', 0.6: '#eda100', 0.8: '#e87ba4', 1.0: '#e34948' }}
 }}).addTo(map);
 
-// ---- Points-by-rep layer (built lazily -- see buildPointsLayer below -- since it's
-// ~10,900 circleMarkers and this layer is hidden by default) ----
+// ---- Points-by-rep layer ----
 const pointsLayer = L.layerGroup();
-let pointsBuilt = false;
+const sharedCanvas = L.canvas({{ padding: 0.5 }});
 function escapeHtml(s) {{
   return s.replace(/[&<>"']/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);
 }}
-function buildPointsLayer() {{
-  const sharedCanvas = L.canvas({{ padding: 0.5 }});
-  // One marker per practice (not two): Leaflet's canvas renderer redraws every path
-  // on a renderer whenever any one changes, so halving the path count (was a separate
-  // invisible radius-9 tap-target plus a visible radius-2.2 dot, ~21,826 paths total)
-  // roughly halves the redraw cost of toggling this layer. radius 4 is a compromise
-  // between the old tiny 2.2px dot and the old 9px tap-target -- a bit chunkier-looking
-  // than before, but still reasonably tappable, for meaningfully less lag.
-  MAP_DATA.points.forEach(p => {{
-    const [lat, lon, ri, name, address] = p;
-    const color = ri >= 0 ? REP_COLORS[ri] : ORPHAN_COLOR;
-    const latlng = [lat, lon];
-    const popupHtml = name ? `<b>${{escapeHtml(name)}}</b>${{address ? '<br>' + escapeHtml(address) : ''}}` : null;
+MAP_DATA.points.forEach(p => {{
+  const [lat, lon, ri, name, address] = p;
+  const color = ri >= 0 ? REP_COLORS[ri] : ORPHAN_COLOR;
+  const latlng = [lat, lon];
+  const popupHtml = name ? `<b>${{escapeHtml(name)}}</b>${{address ? '<br>' + escapeHtml(address) : ''}}` : null;
 
-    // Fully opaque so overlapping dots stay flat colour instead of blending into a glow.
-    const marker = L.circleMarker(latlng, {{
-      radius: 4, weight: 0, fillOpacity: 1, fillColor: color, renderer: sharedCanvas
-    }}).addTo(pointsLayer);
-    if (popupHtml) marker.bindPopup(popupHtml);
-  }});
-}}
+  // Bigger invisible hit-area underneath so tapping doesn't require pixel precision.
+  // Leaflet's circle click detection is a pure geometric radius check, not pixel-based,
+  // so fillOpacity 0 still registers clicks/taps with zero visual contribution (no glow
+  // from thousands of overlapping near-transparent circles).
+  if (popupHtml) {{
+    L.circleMarker(latlng, {{
+      radius: 9, weight: 0, fillOpacity: 0, fillColor: color, renderer: sharedCanvas
+    }}).addTo(pointsLayer).bindPopup(popupHtml);
+  }}
 
-// ---- Postcode area overlay (RG, LS, NG, ...), also built lazily (~240 layers,
-// hidden by default) ----
+  // Small visible dot on top (not interactive so it doesn't block the hit-area click).
+  // Fully opaque so overlapping dots stay flat colour instead of blending into a glow.
+  L.circleMarker(latlng, {{
+    radius: 2.2, weight: 0, fillOpacity: 1, fillColor: color,
+    renderer: sharedCanvas, interactive: false
+  }}).addTo(pointsLayer);
+}});
+
+// ---- Postcode area overlay (RG, LS, NG, ...) ----
 const postcodeLayer = L.layerGroup();
-let postcodeBuilt = false;
-function buildPostcodeLayer() {{
-  L.geoJSON(POSTCODE_AREAS, {{
-    style: {{ color: '#5a4a1f', weight: 1, opacity: 0.55, fill: false }},
+L.geoJSON(POSTCODE_AREAS, {{
+  style: {{ color: '#5a4a1f', weight: 1, opacity: 0.55, fill: false }},
+  interactive: false
+}}).addTo(postcodeLayer);
+POSTCODE_AREAS.features.forEach(f => {{
+  const {{ area, labelLat, labelLon }} = f.properties;
+  L.marker([labelLat, labelLon], {{
+    icon: L.divIcon({{ className: 'postcode-label', html: area, iconSize: [40, 14], iconAnchor: [20, 7] }}),
     interactive: false
   }}).addTo(postcodeLayer);
-  POSTCODE_AREAS.features.forEach(f => {{
-    const {{ area, labelLat, labelLon }} = f.properties;
-    L.marker([labelLat, labelLon], {{
-      icon: L.divIcon({{ className: 'postcode-label', html: area, iconSize: [40, 14], iconAnchor: [20, 7] }}),
-      interactive: false
-    }}).addTo(postcodeLayer);
-  }});
-}}
+}});
 document.getElementById('toggle-postcodes').addEventListener('change', (e) => {{
-  if (e.target.checked) {{
-    if (!postcodeBuilt) {{ buildPostcodeLayer(); postcodeBuilt = true; }}
-    postcodeLayer.addTo(map);
-  }} else {{
-    map.removeLayer(postcodeLayer);
-  }}
+  e.target.checked ? postcodeLayer.addTo(map) : map.removeLayer(postcodeLayer);
 }});
 
 // ---- Rep HQ markers ----
@@ -285,12 +258,7 @@ document.getElementById('toggle-heat').addEventListener('change', (e) => {{
   e.target.checked ? heatLayer.addTo(map) : map.removeLayer(heatLayer);
 }});
 document.getElementById('toggle-points').addEventListener('change', (e) => {{
-  if (e.target.checked) {{
-    if (!pointsBuilt) {{ buildPointsLayer(); pointsBuilt = true; }}
-    pointsLayer.addTo(map);
-  }} else {{
-    map.removeLayer(pointsLayer);
-  }}
+  e.target.checked ? pointsLayer.addTo(map) : map.removeLayer(pointsLayer);
 }});
 document.getElementById('toggle-reps').addEventListener('change', (e) => {{
   e.target.checked ? repsLayer.addTo(map) : map.removeLayer(repsLayer);
@@ -365,10 +333,6 @@ document.addEventListener('click', (e) => {{
     searchResultsEl.innerHTML = '';
   }}
 }});
-
-document.getElementById('loading-overlay').style.display = 'none';
-
-}} // end initMap
 </script>
 </body>
 </html>
