@@ -142,34 +142,108 @@ const heatLayer = L.heatLayer(heatPoints, {
 }).addTo(map);
 
 // ---- Points-by-rep layer ----
-const pointsLayer = L.layerGroup();
-const sharedCanvas = L.canvas({ padding: 0.5 });
+// Custom canvas layer instead of per-point L.circleMarker on a shared L.canvas
+// renderer: Leaflet's canvas renderer has no incremental-redraw concept, so
+// attaching/detaching *any* path forces a full clear-and-redraw of every path
+// registered to that renderer -- with ~10,900 practices (an invisible radius-9
+// tap-target plus a visible radius-2.2 dot per practice, ~21,800 paths total)
+// that made every toggle cost 1.4-2.9s regardless of build caching (measured
+// live with Playwright under 4x CPU throttling). This draws all dots in one
+// manual canvas pass instead, and keeps the canvas mounted after the first
+// build so repeat toggles are a plain display:none/'' flip -- no redraw, no
+// Leaflet layer add/remove. Visual appearance (dot size/colour/opacity, ~9px
+// tap radius) is unchanged from before.
+//
+// Zoom animation: a plain canvas doesn't participate in Leaflet's zoom
+// transition on its own, so it would visibly freeze mid-zoom while the
+// basemap scales underneath it. _onZoomAnim below replicates L.Renderer's own
+// _updateTransform (see Leaflet's src/layer/vector/Renderer.js) so this canvas
+// gets the same one-shot CSS scale+translate that Leaflet's built-in canvas
+// renderer uses, animated smoothly by the browser via the .leaflet-zoom-anim
+// transition rule already in leaflet.css -- not something bespoke.
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 }
-MAP_DATA.points.forEach(p => {
-  const [lat, lon, ri, name, address] = p;
-  const color = ri >= 0 ? REP_COLORS[ri] : ORPHAN_COLOR;
-  const latlng = [lat, lon];
-  const popupHtml = name ? `<b>${escapeHtml(name)}</b>${address ? '<br>' + escapeHtml(address) : ''}` : null;
-
-  // Bigger invisible hit-area underneath so tapping doesn't require pixel precision.
-  // Leaflet's circle click detection is a pure geometric radius check, not pixel-based,
-  // so fillOpacity 0 still registers clicks/taps with zero visual contribution (no glow
-  // from thousands of overlapping near-transparent circles).
-  if (popupHtml) {
-    L.circleMarker(latlng, {
-      radius: 9, weight: 0, fillOpacity: 0, fillColor: color, renderer: sharedCanvas
-    }).addTo(pointsLayer).bindPopup(popupHtml);
-  }
-
-  // Small visible dot on top (not interactive so it doesn't block the hit-area click).
-  // Fully opaque so overlapping dots stay flat colour instead of blending into a glow.
-  L.circleMarker(latlng, {
-    radius: 2.2, weight: 0, fillOpacity: 1, fillColor: color,
-    renderer: sharedCanvas, interactive: false
-  }).addTo(pointsLayer);
+const PointsLayer = L.Layer.extend({
+  onAdd(map) {
+    this._map = map;
+    if (!this._canvas) {
+      this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated points-layer-canvas');
+      this._ctx = this._canvas.getContext('2d');
+      map.getPane('overlayPane').appendChild(this._canvas);
+      map.on('moveend zoomend resize viewreset', this._onViewChange, this);
+      if (map._zoomAnimated) {
+        map.on('zoomanim', this._onZoomAnim, this);
+      }
+      this._canvas.addEventListener('click', this._onClick.bind(this));
+    }
+    this._canvas.style.display = '';
+    this._redraw();
+    return this;
+  },
+  onRemove() {
+    this._canvas.style.display = 'none';
+    return this;
+  },
+  _onViewChange() {
+    if (this._canvas.style.display === 'none') return;
+    this._redraw();
+  },
+  _redraw() {
+    // setPosition resets the CSS transform to a plain translate (no scale),
+    // clearing whatever mid-zoom scale _onZoomAnim last applied.
+    L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
+    const size = this._map.getSize();
+    this._canvas.width = size.x;
+    this._canvas.height = size.y;
+    this._center = this._map.getCenter();
+    this._zoom = this._map.getZoom();
+    this._draw();
+  },
+  _onZoomAnim(e) {
+    // Exactly mirrors L.Renderer._updateTransform with padding 0.
+    const scale = this._map.getZoomScale(e.zoom, this._zoom);
+    const viewHalf = this._map.getSize().multiplyBy(0.5);
+    const currentCenterPoint = this._map.project(this._center, e.zoom);
+    const topLeftOffset = viewHalf.multiplyBy(-scale).add(currentCenterPoint)
+      .subtract(this._map._getNewPixelOrigin(e.center, e.zoom));
+    L.DomUtil.setTransform(this._canvas, topLeftOffset, scale);
+  },
+  _draw() {
+    const ctx = this._ctx;
+    ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+    this._hitPoints = [];
+    for (const p of MAP_DATA.points) {
+      const [lat, lon, ri, name, address] = p;
+      const pt = this._map.latLngToContainerPoint([lat, lon]);
+      ctx.beginPath();
+      ctx.fillStyle = ri >= 0 ? REP_COLORS[ri] : ORPHAN_COLOR;
+      ctx.arc(pt.x, pt.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      if (name) this._hitPoints.push({ x: pt.x, y: pt.y, lat, lon, name, address });
+    }
+  },
+  _onClick(e) {
+    const rect = this._canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    let closest = null, closestDist = 9; // matches the old invisible radius-9 tap-target
+    for (const hp of this._hitPoints) {
+      const dist = Math.hypot(hp.x - x, hp.y - y);
+      if (dist <= closestDist) { closest = hp; closestDist = dist; }
+    }
+    if (closest) {
+      // Stop this click reaching the map's own click handling -- otherwise Leaflet
+      // treats it as "clicked empty map" and immediately closes the popup we just
+      // opened, same as it would for any interactive layer's click if it didn't
+      // stop propagation.
+      L.DomEvent.stopPropagation(e);
+      const popupHtml = `<b>${escapeHtml(closest.name)}</b>${closest.address ? '<br>' + escapeHtml(closest.address) : ''}`;
+      L.popup().setLatLng([closest.lat, closest.lon]).setContent(popupHtml).openOn(this._map);
+    }
+  },
 });
+const pointsLayer = new PointsLayer();
 
 // ---- Postcode area overlay (RG, LS, NG, ...) ----
 const postcodeLayer = L.layerGroup();
