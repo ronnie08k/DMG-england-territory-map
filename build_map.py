@@ -170,7 +170,7 @@ const heatLayer = L.heatLayer(heatPoints, {{
 }}).addTo(map);
 
 // ---- Points-by-rep layer (built lazily -- see buildPointsLayer below -- since it's
-// ~21,800 circleMarkers and this layer is hidden by default) ----
+// ~10,900 circleMarkers and this layer is hidden by default) ----
 const pointsLayer = L.layerGroup();
 let pointsBuilt = false;
 function escapeHtml(s) {{
@@ -178,28 +178,23 @@ function escapeHtml(s) {{
 }}
 function buildPointsLayer() {{
   const sharedCanvas = L.canvas({{ padding: 0.5 }});
+  // One marker per practice (not two): Leaflet's canvas renderer redraws every path
+  // on a renderer whenever any one changes, so halving the path count (was a separate
+  // invisible radius-9 tap-target plus a visible radius-2.2 dot, ~21,826 paths total)
+  // roughly halves the redraw cost of toggling this layer. radius 4 is a compromise
+  // between the old tiny 2.2px dot and the old 9px tap-target -- a bit chunkier-looking
+  // than before, but still reasonably tappable, for meaningfully less lag.
   MAP_DATA.points.forEach(p => {{
     const [lat, lon, ri, name, address] = p;
     const color = ri >= 0 ? REP_COLORS[ri] : ORPHAN_COLOR;
     const latlng = [lat, lon];
     const popupHtml = name ? `<b>${{escapeHtml(name)}}</b>${{address ? '<br>' + escapeHtml(address) : ''}}` : null;
 
-    // Bigger invisible hit-area underneath so tapping doesn't require pixel precision.
-    // Leaflet's circle click detection is a pure geometric radius check, not pixel-based,
-    // so fillOpacity 0 still registers clicks/taps with zero visual contribution (no glow
-    // from thousands of overlapping near-transparent circles).
-    if (popupHtml) {{
-      L.circleMarker(latlng, {{
-        radius: 9, weight: 0, fillOpacity: 0, fillColor: color, renderer: sharedCanvas
-      }}).addTo(pointsLayer).bindPopup(popupHtml);
-    }}
-
-    // Small visible dot on top (not interactive so it doesn't block the hit-area click).
     // Fully opaque so overlapping dots stay flat colour instead of blending into a glow.
-    L.circleMarker(latlng, {{
-      radius: 2.2, weight: 0, fillOpacity: 1, fillColor: color,
-      renderer: sharedCanvas, interactive: false
+    const marker = L.circleMarker(latlng, {{
+      radius: 4, weight: 0, fillOpacity: 1, fillColor: color, renderer: sharedCanvas
     }}).addTo(pointsLayer);
+    if (popupHtml) marker.bindPopup(popupHtml);
   }});
 }}
 
