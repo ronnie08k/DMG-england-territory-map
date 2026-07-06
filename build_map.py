@@ -1,10 +1,14 @@
 """Stage 3: render the self-contained Leaflet HTML map from data/territories.json."""
+import base64
 import json
 from pathlib import Path
 
 DATA_DIR = Path("data")
+ASSETS_DIR = Path("assets")
 TERRITORIES_PATH = DATA_DIR / "territories.json"
 POSTCODE_AREAS_PATH = DATA_DIR / "postcode_areas.geojson"
+LOGO_OUTLINE_PATH = ASSETS_DIR / "dmg-logo-outline.png"
+LOGO_FILL_PATH = ASSETS_DIR / "dmg-logo-filled.png"
 OUTPUT_PATH = Path("Dental_Practices_Heatmap.html")
 
 HTML_TEMPLATE = """<!doctype html>
@@ -80,9 +84,28 @@ HTML_TEMPLATE = """<!doctype html>
     font-size:11px; font-weight:600; color:#5a4a1f; text-shadow:0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
     white-space:nowrap; pointer-events:none;
   }}
+  #loading-overlay {{
+    position:fixed; inset:0; z-index:5000; background:#fff;
+    display:flex; align-items:center; justify-content:center;
+    opacity:1; transition:opacity 0.4s ease;
+  }}
+  #loading-overlay.hidden {{ opacity:0; pointer-events:none; }}
+  .loading-logo-wrap {{ position:relative; width:min(280px, 60vw); height:min(280px, 60vw); }}
+  .loading-logo-wrap img {{ position:absolute; inset:0; width:100%; height:100%; }}
+  .loading-logo-fill {{
+    clip-path:inset(100% 0 0 0);
+    transition:clip-path 0.25s linear;
+  }}
 </style>
 </head>
 <body>
+
+<div id="loading-overlay">
+  <div class="loading-logo-wrap">
+    <img class="loading-logo-fill" src="data:image/png;base64,{logo_fill_b64}" alt="">
+    <img class="loading-logo-outline" src="data:image/png;base64,{logo_outline_b64}" alt="">
+  </div>
+</div>
 
 <div id="topbar">
   <h1>England Dental Practices — Density &amp; 5-Rep Territory Plan</h1>
@@ -121,6 +144,43 @@ HTML_TEMPLATE = """<!doctype html>
 const MAP_DATA = {map_data_json};
 const POSTCODE_AREAS = {postcode_areas_json};
 
+// ---- Loading overlay: a minimum-5s branded splash so the map (and its initial
+// tiles) get a real chance to finish setting up before anything's revealed. The
+// fill bar is a second copy of the logo, clipped from the bottom up over the
+// outline as setLoadProgress() advances -- never hides early, and if a
+// milestone never fires for some reason, HARD_CAP_MS forces it open anyway
+// rather than leaving the page stuck behind a white screen forever.
+const __loadStart = Date.now();
+const __loadingOverlay = document.getElementById('loading-overlay');
+const __loadingFill = document.querySelector('.loading-logo-fill');
+const MIN_DISPLAY_MS = 5000;
+const HARD_CAP_MS = 15000;
+let __loadProgress = 0;
+let __overlayHidden = false;
+function setLoadProgress(p) {{
+  __loadProgress = Math.max(__loadProgress, p);
+  __loadingFill.style.clipPath = `inset(${{100 - __loadProgress}}% 0 0 0)`;
+  if (__loadProgress >= 100) scheduleHideOverlay();
+}}
+function hideOverlay() {{
+  if (__overlayHidden) return;
+  __overlayHidden = true;
+  __loadingOverlay.classList.add('hidden');
+  setTimeout(() => {{ __loadingOverlay.style.display = 'none'; }}, 450);
+}}
+function scheduleHideOverlay() {{
+  setTimeout(hideOverlay, Math.max(0, MIN_DISPLAY_MS - (Date.now() - __loadStart)));
+}}
+setTimeout(hideOverlay, HARD_CAP_MS);
+setLoadProgress(8);
+
+// Deferred one tick so the browser actually paints #loading-overlay before this
+// heavy synchronous setup runs (a blocking <script> can otherwise suppress the
+// first paint entirely, making the overlay never visibly appear).
+setTimeout(initMap, 0);
+
+function initMap() {{
+
 const REP_COLORS = ["#2a78d6", "#e34948", "#1baf7a", "#eda100", "#4a3aa7"];
 const ORPHAN_COLOR = "#9a9890";
 
@@ -130,6 +190,8 @@ const voyager = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voy
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
   subdomains: 'abcd', maxZoom: 20
 }}).addTo(map);
+voyager.on('load', () => setLoadProgress(100));
+setLoadProgress(20);
 
 const osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -149,6 +211,7 @@ const heatLayer = L.heatLayer(heatPoints, {{
   minOpacity: 0.25,
   gradient: {{ 0.15: '#2a78d6', 0.4: '#5598e7', 0.6: '#eda100', 0.8: '#e87ba4', 1.0: '#e34948' }}
 }}).addTo(map);
+setLoadProgress(45);
 
 // ---- Points-by-rep layer ----
 // Custom canvas layer instead of per-point L.circleMarker on a shared L.canvas
@@ -327,6 +390,7 @@ if (MAP_DATA.orphanCount > 0) {{
   row.innerHTML = `<span class="swatch" style="background:${{ORPHAN_COLOR}}"></span>Beyond 200km of any hub<span class="count">${{MAP_DATA.orphanCount.toLocaleString()}}</span>`;
   legendEl.appendChild(row);
 }}
+setLoadProgress(70);
 
 document.getElementById('toggle-heat').addEventListener('change', (e) => {{
   e.target.checked ? heatLayer.addTo(map) : map.removeLayer(heatLayer);
@@ -407,6 +471,8 @@ document.addEventListener('click', (e) => {{
     searchResultsEl.innerHTML = '';
   }}
 }});
+
+}} // end initMap
 </script>
 </body>
 </html>
@@ -417,12 +483,16 @@ def main():
     territories = json.loads(TERRITORIES_PATH.read_text())
     postcode_areas = json.loads(POSTCODE_AREAS_PATH.read_text())
     n_total = len(territories["points"])
+    logo_outline_b64 = base64.b64encode(LOGO_OUTLINE_PATH.read_bytes()).decode()
+    logo_fill_b64 = base64.b64encode(LOGO_FILL_PATH.read_bytes()).decode()
 
     html = HTML_TEMPLATE.format(
         n_total=n_total,
         distance_cap_km=200.0,
         map_data_json=json.dumps(territories),
         postcode_areas_json=json.dumps(postcode_areas),
+        logo_outline_b64=logo_outline_b64,
+        logo_fill_b64=logo_fill_b64,
     )
     OUTPUT_PATH.write_text(html, encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH} ({len(html):,} bytes)")
