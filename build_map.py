@@ -90,11 +90,23 @@ HTML_TEMPLATE = """<!doctype html>
     opacity:1; transition:opacity 0.4s ease;
   }}
   #loading-overlay.hidden {{ opacity:0; pointer-events:none; }}
-  .loading-logo-wrap {{ position:relative; width:min(280px, 60vw); height:min(280px, 60vw); }}
+  .loading-logo-wrap {{ position:relative; width:min(322px, 69vw); height:min(322px, 69vw); }}
   .loading-logo-wrap img {{ position:absolute; inset:0; width:100%; height:100%; }}
+  /* Water-fill: a gentle wave rises up the logo over exactly 5s, independent of
+     real load time (see __ready/tryHide in the script below for the actual
+     "is it safe to hide" gate). Same 7-point count at every keyframe so the
+     browser can tween the polygon smoothly; amplitude is 0 at 0%/100% (clean
+     start/end) and peaks at 50%, so the ripple settles flat once full. */
   .loading-logo-fill {{
-    clip-path:inset(100% 0 0 0);
-    transition:clip-path 0.25s linear;
+    clip-path: polygon(0% 100%, 25% 100%, 50% 100%, 75% 100%, 100% 100%, 100% 100%, 0% 100%);
+    animation: water-fill 5000ms linear forwards;
+  }}
+  @keyframes water-fill {{
+    0%   {{ clip-path: polygon(0% 100%, 25% 100%, 50% 100%, 75% 100%, 100% 100%, 100% 100%, 0% 100%); }}
+    25%  {{ clip-path: polygon(0% 75%, 25% 72.17%, 50% 75%, 75% 77.83%, 100% 75%, 100% 100%, 0% 100%); }}
+    50%  {{ clip-path: polygon(0% 50%, 25% 46%, 50% 50%, 75% 54%, 100% 50%, 100% 100%, 0% 100%); }}
+    75%  {{ clip-path: polygon(0% 25%, 25% 22.17%, 50% 25%, 75% 27.83%, 100% 25%, 100% 100%, 0% 100%); }}
+    100% {{ clip-path: polygon(0% 0%, 25% 0%, 50% 0%, 75% 0%, 100% 0%, 100% 100%, 0% 100%); }}
   }}
 </style>
 </head>
@@ -145,34 +157,31 @@ const MAP_DATA = {map_data_json};
 const POSTCODE_AREAS = {postcode_areas_json};
 
 // ---- Loading overlay: a minimum-5s branded splash so the map (and its initial
-// tiles) get a real chance to finish setting up before anything's revealed. The
-// fill bar is a second copy of the logo, clipped from the bottom up over the
-// outline as setLoadProgress() advances -- never hides early, and if a
+// tiles) get a real chance to finish setting up before anything's revealed.
+// The fill's rise is a pure 5s CSS animation (see .loading-logo-fill/@keyframes
+// water-fill above) -- it always takes the full 5s regardless of how fast the
+// page actually loads. __ready tracks real completion (map/tiles/etc.) purely
+// to decide when it's *safe* to hide: never before the 5s animation finishes,
+// and never before the page is actually ready even if that's past 5s. If a
 // milestone never fires for some reason, HARD_CAP_MS forces it open anyway
 // rather than leaving the page stuck behind a white screen forever.
 const __loadStart = Date.now();
 const __loadingOverlay = document.getElementById('loading-overlay');
-const __loadingFill = document.querySelector('.loading-logo-fill');
 const MIN_DISPLAY_MS = 5000;
 const HARD_CAP_MS = 15000;
-let __loadProgress = 0;
+let __ready = false;
 let __overlayHidden = false;
-function setLoadProgress(p) {{
-  __loadProgress = Math.max(__loadProgress, p);
-  __loadingFill.style.clipPath = `inset(${{100 - __loadProgress}}% 0 0 0)`;
-  if (__loadProgress >= 100) scheduleHideOverlay();
-}}
 function hideOverlay() {{
   if (__overlayHidden) return;
   __overlayHidden = true;
   __loadingOverlay.classList.add('hidden');
   setTimeout(() => {{ __loadingOverlay.style.display = 'none'; }}, 450);
 }}
-function scheduleHideOverlay() {{
+function tryHideOverlay() {{
+  if (!__ready) return;
   setTimeout(hideOverlay, Math.max(0, MIN_DISPLAY_MS - (Date.now() - __loadStart)));
 }}
 setTimeout(hideOverlay, HARD_CAP_MS);
-setLoadProgress(8);
 
 // Deferred one tick so the browser actually paints #loading-overlay before this
 // heavy synchronous setup runs (a blocking <script> can otherwise suppress the
@@ -190,8 +199,7 @@ const voyager = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voy
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
   subdomains: 'abcd', maxZoom: 20
 }}).addTo(map);
-voyager.on('load', () => setLoadProgress(100));
-setLoadProgress(20);
+voyager.on('load', () => {{ __ready = true; tryHideOverlay(); }});
 
 const osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -211,7 +219,6 @@ const heatLayer = L.heatLayer(heatPoints, {{
   minOpacity: 0.25,
   gradient: {{ 0.15: '#2a78d6', 0.4: '#5598e7', 0.6: '#eda100', 0.8: '#e87ba4', 1.0: '#e34948' }}
 }}).addTo(map);
-setLoadProgress(45);
 
 // ---- Points-by-rep layer ----
 // Custom canvas layer instead of per-point L.circleMarker on a shared L.canvas
@@ -390,7 +397,6 @@ if (MAP_DATA.orphanCount > 0) {{
   row.innerHTML = `<span class="swatch" style="background:${{ORPHAN_COLOR}}"></span>Beyond 200km of any hub<span class="count">${{MAP_DATA.orphanCount.toLocaleString()}}</span>`;
   legendEl.appendChild(row);
 }}
-setLoadProgress(70);
 
 document.getElementById('toggle-heat').addEventListener('change', (e) => {{
   e.target.checked ? heatLayer.addTo(map) : map.removeLayer(heatLayer);
