@@ -38,6 +38,7 @@ from tfl_zones import tag_zone1
 DATA_DIR = Path("data")
 INPUT_PATH = DATA_DIR / "practices_geocoded.csv"
 UK_INPUT_PATH = DATA_DIR / "practices_geocoded_uk.csv"
+IRELAND_INPUT_PATH = DATA_DIR / "practices_ireland.csv"
 OUTPUT_JSON = DATA_DIR / "territories.json"
 OUTPUT_CSV = DATA_DIR / "territory_assignment.csv"
 
@@ -406,19 +407,35 @@ def main():
     for h in hubs:
         h["areas"].sort(key=lambda a: a["code"])
 
+    points = [
+        [float(lat), float(lon), int(ri), name, addr]
+        for lat, lon, ri, name, addr in zip(
+            df["lat"], df["lon"], df["rep_index"],
+            df["Practice Name"], df["display_address"].fillna(""),
+        )
+    ]
+
+    # Ireland practices aren't reachable from any of the 5 England hubs, so
+    # they're appended directly as unassigned (orphan/grey) points rather than
+    # run through the rep-assignment pipeline above -- just plotted on the
+    # map, nothing else (no rep-territory colour, no legend area breakdown).
+    ireland_df = pd.read_csv(IRELAND_INPUT_PATH)
+    points.extend(
+        [float(lat), float(lon), -1, name, addr]
+        for lat, lon, name, addr in zip(
+            ireland_df["lat"], ireland_df["lon"],
+            ireland_df["Practice Name"], ireland_df["display_address"].fillna(""),
+        )
+    )
+    print(f"Added {len(ireland_df)} Ireland practices as unassigned/orphan points")
+
     map_data = {
-        "points": [
-            [float(lat), float(lon), int(ri), name, addr]
-            for lat, lon, ri, name, addr in zip(
-                df["lat"], df["lon"], df["rep_index"],
-                df["Practice Name"], df["display_address"].fillna(""),
-            )
-        ],
+        "points": points,
         "reps": [
             {"name": h["name"], "lat": h["lat"], "lon": h["lon"], "count": h["count"], "areas": h["areas"]}
             for h in hubs
         ],
-        "orphanCount": n_orphan,
+        "orphanCount": n_orphan + len(ireland_df),
     }
     DATA_DIR.mkdir(exist_ok=True)
     OUTPUT_JSON.write_text(json.dumps(map_data))
