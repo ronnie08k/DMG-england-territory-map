@@ -90,21 +90,25 @@ HTML_TEMPLATE = """<!doctype html>
     opacity:1; transition:opacity 0.4s ease;
   }}
   #loading-overlay.hidden {{ opacity:0; pointer-events:none; }}
+  .loading-caption {{
+    position:absolute; top:28px; left:0; right:0; text-align:center;
+    font-size:12.5px; color:#82807a; padding:0 20px;
+  }}
   /* Logo assets are cropped tight to their content bounding box (384x97, a
      wide short wordmark) -- aspect-ratio keeps height proportional so the
      water-fill (which spans the full box height) actually crosses visible
-     artwork almost immediately and for almost the entire 5s, instead of
+     artwork almost immediately and for almost the entire 3s, instead of
      mostly empty canvas padding. */
   .loading-logo-wrap {{ position:relative; width:min(322px, 69vw); aspect-ratio: 384 / 97; }}
   .loading-logo-wrap img {{ position:absolute; inset:0; width:100%; height:100%; }}
-  /* Water-fill: a gentle wave rises up the logo over exactly 5s, independent of
+  /* Water-fill: a gentle wave rises up the logo over exactly 3s, independent of
      real load time (see __ready/tryHideOverlay in the script below for the
      actual "is it safe to hide" gate). Same 7-point count at every keyframe so
      the browser can tween the polygon smoothly; amplitude is 0 at 0%/100%
      (clean start/end) and peaks at 50%, so the ripple settles flat once full. */
   .loading-logo-fill {{
     clip-path: polygon(0% 100%, 25% 100%, 50% 100%, 75% 100%, 100% 100%, 100% 100%, 0% 100%);
-    animation: water-fill 5000ms linear forwards;
+    animation: water-fill 3000ms linear forwards;
   }}
   @keyframes water-fill {{
     0%   {{ clip-path: polygon(0% 100%, 25% 100%, 50% 100%, 75% 100%, 100% 100%, 100% 100%, 0% 100%); }}
@@ -118,6 +122,7 @@ HTML_TEMPLATE = """<!doctype html>
 <body>
 
 <div id="loading-overlay">
+  <div class="loading-caption">Please wait ~4 seconds for the map to finish loading once past this screen</div>
   <div class="loading-logo-wrap">
     <img class="loading-logo-outline" src="data:image/png;base64,{logo_outline_b64}" alt="">
     <img class="loading-logo-fill" src="data:image/png;base64,{logo_fill_b64}" alt="">
@@ -158,18 +163,18 @@ HTML_TEMPLATE = """<!doctype html>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>
-// ---- Loading overlay: a minimum-5s branded splash so the map (and its initial
+// ---- Loading overlay: a minimum-3s branded splash so the map (and its initial
 // tiles) get a real chance to finish setting up before anything's revealed.
-// The fill's rise is a pure 5s CSS animation (see .loading-logo-fill/@keyframes
-// water-fill above) -- it always takes the full 5s regardless of how fast the
+// The fill's rise is a pure 3s CSS animation (see .loading-logo-fill/@keyframes
+// water-fill above) -- it always takes the full 3s regardless of how fast the
 // page actually loads. __ready tracks real completion (map/tiles/etc.) purely
-// to decide when it's *safe* to hide: never before the 5s animation finishes,
-// and never before the page is actually ready even if that's past 5s. If a
+// to decide when it's *safe* to hide: never before the 3s animation finishes,
+// and never before the page is actually ready even if that's past 3s. If a
 // milestone never fires for some reason, HARD_CAP_MS forces it open anyway
 // rather than leaving the page stuck behind a white screen forever.
 const __loadStart = Date.now();
 const __loadingOverlay = document.getElementById('loading-overlay');
-const MIN_DISPLAY_MS = 5000;
+const MIN_DISPLAY_MS = 3000;
 const HARD_CAP_MS = 15000;
 let __ready = false;
 let __overlayHidden = false;
