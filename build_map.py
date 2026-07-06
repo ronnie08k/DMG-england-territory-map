@@ -501,6 +501,15 @@ document.addEventListener('click', (e) => {{
   }}
 }});
 
+// Pre-warm the rep-territory canvas (normally lazily built on first toggle)
+// while still behind the loading screen: add it to the map and immediately
+// remove it again, forcing the one-time canvas creation + first draw pass
+// now instead of on the user's first real click. Both calls are synchronous
+// so nothing is ever actually painted on screen -- the checkbox itself stays
+// unchecked throughout.
+pointsLayer.addTo(map);
+map.removeLayer(pointsLayer);
+
 }} // end initMapPart3
 }} // end initMap
 </script>
