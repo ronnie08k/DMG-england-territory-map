@@ -86,10 +86,6 @@ HTML_TEMPLATE = """<!doctype html>
     opacity:1; transition:opacity 0.4s ease;
   }}
   #loading-overlay.hidden {{ opacity:0; pointer-events:none; }}
-  .loading-caption {{
-    position:absolute; top:36px; left:0; right:0; text-align:center;
-    font-size:19px; color:#52514e; padding:0 20px;
-  }}
   /* Logo assets are cropped tight to their content bounding box (384x97, a
      wide short wordmark) -- aspect-ratio keeps height proportional so the
      water-fill (which spans the full box height) actually crosses visible
@@ -118,7 +114,6 @@ HTML_TEMPLATE = """<!doctype html>
 <body>
 
 <div id="loading-overlay">
-  <div class="loading-caption">Please wait ~4 seconds for the map to finish loading once past this screen</div>
   <div class="loading-logo-wrap">
     <img class="loading-logo-outline" src="data:image/png;base64,{logo_outline_b64}" alt="">
     <img class="loading-logo-fill" src="data:image/png;base64,{logo_fill_b64}" alt="">
