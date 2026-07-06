@@ -80,10 +80,6 @@ HTML_TEMPLATE = """<!doctype html>
     padding:6px 9px; border-radius:6px; font-size:12px; display:none; box-shadow:0 2px 8px rgba(0,0,0,0.3);
   }}
   a.credit {{ color:#a9b0bd; }}
-  .postcode-label {{
-    font-size:11px; font-weight:600; color:#5a4a1f; text-shadow:0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
-    white-space:nowrap; pointer-events:none;
-  }}
   #loading-overlay {{
     position:fixed; inset:0; z-index:5000; background:#fff;
     display:flex; align-items:center; justify-content:center;
@@ -307,14 +303,35 @@ const PointsLayer = L.Layer.extend({{
     const ctx = this._ctx;
     ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
     this._hitPoints = [];
+    // Batch by colour: one beginPath()+fill() per colour (~6 buckets) instead
+    // of one per point. ~10,900 individual fill() calls was the dominant cost
+    // here -- each canvas fill() call has real per-call overhead beyond just
+    // the path geometry, and under real-world main-thread contention (tile
+    // decode/paint work right as the loading screen fades) that overhead is
+    // what made the very first user click 3-5x slower than the identical
+    // pre-warm draw, even on the same data/canvas size. moveTo before each arc
+    // avoids a connecting line being drawn between consecutive circles in the
+    // same path.
+    // Plain array of buckets indexed by rep index (0-4), orphan uses index 5 --
+    // faster than a Map keyed by colour string (no hashing/string comparison).
+    const buckets = [[], [], [], [], [], []];
     for (const p of MAP_DATA.points) {{
       const [lat, lon, ri, name, address] = p;
       const pt = this._map.latLngToContainerPoint([lat, lon]);
-      ctx.beginPath();
-      ctx.fillStyle = ri >= 0 ? REP_COLORS[ri] : ORPHAN_COLOR;
-      ctx.arc(pt.x, pt.y, 2.2, 0, Math.PI * 2);
-      ctx.fill();
+      buckets[ri >= 0 ? ri : 5].push(pt.x, pt.y);
       if (name) this._hitPoints.push({{ x: pt.x, y: pt.y, lat, lon, name, address }});
+    }}
+    for (let bi = 0; bi < buckets.length; bi++) {{
+      const coords = buckets[bi];
+      if (!coords.length) continue;
+      ctx.beginPath();
+      ctx.fillStyle = bi < 5 ? REP_COLORS[bi] : ORPHAN_COLOR;
+      for (let i = 0; i < coords.length; i += 2) {{
+        const x = coords[i], y = coords[i + 1];
+        ctx.moveTo(x + 2.2, y);
+        ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+      }}
+      ctx.fill();
     }}
   }},
   _onClick(e) {{
@@ -348,21 +365,106 @@ setTimeout(initMapPart2, 0);
 function initMapPart2() {{
 
 // ---- Postcode area overlay (RG, LS, NG, ...) ----
-const postcodeLayer = L.layerGroup();
-L.geoJSON(POSTCODE_AREAS, {{
-  style: {{ color: '#5a4a1f', weight: 1, opacity: 0.55, fill: false }},
-  interactive: false
-}}).addTo(postcodeLayer);
-POSTCODE_AREAS.features.forEach(f => {{
-  const {{ area, labelLat, labelLon }} = f.properties;
-  L.marker([labelLat, labelLon], {{
-    icon: L.divIcon({{ className: 'postcode-label', html: area, iconSize: [40, 14], iconAnchor: [20, 7] }}),
-    interactive: false
-  }}).addTo(postcodeLayer);
+// Custom canvas layer, same rationale and pattern as PointsLayer above:
+// L.geoJSON's ~120 boundary polygons (14,500 coordinate points total) plus a
+// divIcon marker per area label were many individual Leaflet objects
+// added/removed from the map every toggle. Draws all boundary lines in one
+// path/stroke() pass and all labels in one pass, mounts the canvas once and
+// toggles via display:none/'' afterwards -- not interactive, so no hit-testing
+// needed (matches the original layer's interactive:false).
+const PostcodeLayer = L.Layer.extend({{
+  onAdd(map) {{
+    this._map = map;
+    if (!this._canvas) {{
+      this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated postcode-layer-canvas');
+      this._ctx = this._canvas.getContext('2d');
+      map.getPane('overlayPane').appendChild(this._canvas);
+      map.on('moveend zoomend resize viewreset', this._onViewChange, this);
+      if (map._zoomAnimated) {{
+        map.on('zoomanim', this._onZoomAnim, this);
+      }}
+    }}
+    this._canvas.style.display = '';
+    this._redraw();
+    return this;
+  }},
+  onRemove() {{
+    this._canvas.style.display = 'none';
+    return this;
+  }},
+  _onViewChange() {{
+    if (this._canvas.style.display === 'none') return;
+    this._redraw();
+  }},
+  _redraw() {{
+    L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
+    const size = this._map.getSize();
+    this._canvas.width = size.x;
+    this._canvas.height = size.y;
+    this._center = this._map.getCenter();
+    this._zoom = this._map.getZoom();
+    this._draw();
+  }},
+  _onZoomAnim(e) {{
+    // Exactly mirrors L.Renderer._updateTransform with padding 0.
+    const scale = this._map.getZoomScale(e.zoom, this._zoom);
+    const viewHalf = this._map.getSize().multiplyBy(0.5);
+    const currentCenterPoint = this._map.project(this._center, e.zoom);
+    const topLeftOffset = viewHalf.multiplyBy(-scale).add(currentCenterPoint)
+      .subtract(this._map._getNewPixelOrigin(e.center, e.zoom));
+    L.DomUtil.setTransform(this._canvas, topLeftOffset, scale);
+  }},
+  _draw() {{
+    const ctx = this._ctx;
+    ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+
+    // Boundaries: one path for every ring of every feature, one stroke() call.
+    ctx.beginPath();
+    for (const f of POSTCODE_AREAS.features) {{
+      const g = f.geometry;
+      const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+      for (const poly of polys) {{
+        for (const ring of poly) {{
+          for (let i = 0; i < ring.length; i++) {{
+            const pt = this._map.latLngToContainerPoint([ring[i][1], ring[i][0]]);
+            if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+          }}
+        }}
+      }}
+    }}
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = '#5a4a1f';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Labels: white halo (approximating the CSS text-shadow) via a stroked
+    // pass underneath the filled text, matching .postcode-label's look.
+    ctx.font = '600 11px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#fff';
+    ctx.fillStyle = '#5a4a1f';
+    for (const f of POSTCODE_AREAS.features) {{
+      const {{ area, labelLat, labelLon }} = f.properties;
+      const pt = this._map.latLngToContainerPoint([labelLat, labelLon]);
+      ctx.strokeText(area, pt.x, pt.y);
+      ctx.fillText(area, pt.x, pt.y);
+    }}
+  }},
 }});
+const postcodeLayer = new PostcodeLayer();
 document.getElementById('toggle-postcodes').addEventListener('change', (e) => {{
   e.target.checked ? postcodeLayer.addTo(map) : map.removeLayer(postcodeLayer);
 }});
+
+// Pre-warm this canvas too, same rationale as pointsLayer's pre-warm below --
+// builds it behind the loading screen so the user's first real toggle is
+// instant. postcodeLayer is scoped to this stage, so it's warmed here rather
+// than alongside pointsLayer in initMapPart3.
+postcodeLayer.addTo(map);
+map.removeLayer(postcodeLayer);
 
 setTimeout(initMapPart3, 0);
 }} // end initMapPart2
