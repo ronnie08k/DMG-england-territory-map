@@ -90,13 +90,18 @@ HTML_TEMPLATE = """<!doctype html>
     opacity:1; transition:opacity 0.4s ease;
   }}
   #loading-overlay.hidden {{ opacity:0; pointer-events:none; }}
-  .loading-logo-wrap {{ position:relative; width:min(322px, 69vw); height:min(322px, 69vw); }}
+  /* Logo assets are cropped tight to their content bounding box (384x97, a
+     wide short wordmark) -- aspect-ratio keeps height proportional so the
+     water-fill (which spans the full box height) actually crosses visible
+     artwork almost immediately and for almost the entire 5s, instead of
+     mostly empty canvas padding. */
+  .loading-logo-wrap {{ position:relative; width:min(322px, 69vw); aspect-ratio: 384 / 97; }}
   .loading-logo-wrap img {{ position:absolute; inset:0; width:100%; height:100%; }}
   /* Water-fill: a gentle wave rises up the logo over exactly 5s, independent of
-     real load time (see __ready/tryHide in the script below for the actual
-     "is it safe to hide" gate). Same 7-point count at every keyframe so the
-     browser can tween the polygon smoothly; amplitude is 0 at 0%/100% (clean
-     start/end) and peaks at 50%, so the ripple settles flat once full. */
+     real load time (see __ready/tryHideOverlay in the script below for the
+     actual "is it safe to hide" gate). Same 7-point count at every keyframe so
+     the browser can tween the polygon smoothly; amplitude is 0 at 0%/100%
+     (clean start/end) and peaks at 50%, so the ripple settles flat once full. */
   .loading-logo-fill {{
     clip-path: polygon(0% 100%, 25% 100%, 50% 100%, 75% 100%, 100% 100%, 100% 100%, 0% 100%);
     animation: water-fill 5000ms linear forwards;
@@ -329,6 +334,14 @@ const PointsLayer = L.Layer.extend({{
 }});
 const pointsLayer = new PointsLayer();
 
+// Split into a couple of setTimeout(fn, 0)-chained stages so a slow device (or
+// a much larger future dataset) still gives the browser a chance to repaint
+// the water-fill animation between chunks, rather than one unbroken
+// synchronous block for the whole of initMap.
+setTimeout(initMapPart2, 0);
+
+function initMapPart2() {{
+
 // ---- Postcode area overlay (RG, LS, NG, ...) ----
 const postcodeLayer = L.layerGroup();
 L.geoJSON(POSTCODE_AREAS, {{
@@ -345,6 +358,11 @@ POSTCODE_AREAS.features.forEach(f => {{
 document.getElementById('toggle-postcodes').addEventListener('change', (e) => {{
   e.target.checked ? postcodeLayer.addTo(map) : map.removeLayer(postcodeLayer);
 }});
+
+setTimeout(initMapPart3, 0);
+}} // end initMapPart2
+
+function initMapPart3() {{
 
 // ---- Rep HQ markers ----
 const repsLayer = L.layerGroup().addTo(map);
@@ -483,6 +501,7 @@ document.addEventListener('click', (e) => {{
   }}
 }});
 
+}} // end initMapPart3
 }} // end initMap
 </script>
 </body>
