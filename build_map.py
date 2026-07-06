@@ -102,8 +102,8 @@ HTML_TEMPLATE = """<!doctype html>
 
 <div id="loading-overlay">
   <div class="loading-logo-wrap">
-    <img class="loading-logo-fill" src="data:image/png;base64,{logo_fill_b64}" alt="">
     <img class="loading-logo-outline" src="data:image/png;base64,{logo_outline_b64}" alt="">
+    <img class="loading-logo-fill" src="data:image/png;base64,{logo_fill_b64}" alt="">
   </div>
 </div>
 
