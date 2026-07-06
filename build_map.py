@@ -153,9 +153,6 @@ HTML_TEMPLATE = """<!doctype html>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>
-const MAP_DATA = {map_data_json};
-const POSTCODE_AREAS = {postcode_areas_json};
-
 // ---- Loading overlay: a minimum-5s branded splash so the map (and its initial
 // tiles) get a real chance to finish setting up before anything's revealed.
 // The fill's rise is a pure 5s CSS animation (see .loading-logo-fill/@keyframes
@@ -183,12 +180,20 @@ function tryHideOverlay() {{
 }}
 setTimeout(hideOverlay, HARD_CAP_MS);
 
-// Deferred one tick so the browser actually paints #loading-overlay before this
-// heavy synchronous setup runs (a blocking <script> can otherwise suppress the
-// first paint entirely, making the overlay never visibly appear).
+// Deferred one tick so the browser actually paints #loading-overlay (and starts
+// the CSS water-fill animation) before this heavy synchronous setup runs. Also
+// keeps MAP_DATA/POSTCODE_AREAS (1MB+ of literal data) declared *inside*
+// initMap rather than at the top level: a JS engine must fully parse top-level
+// code before executing anything, but can lazily skip over a not-yet-called
+// function's body, so nesting the huge literals in here (instead of the
+// module's top level) is what actually lets the first paint -- and the
+// animation's start -- happen immediately instead of ~1s late.
 setTimeout(initMap, 0);
 
 function initMap() {{
+
+const MAP_DATA = {map_data_json};
+const POSTCODE_AREAS = {postcode_areas_json};
 
 const REP_COLORS = ["#2a78d6", "#e34948", "#1baf7a", "#eda100", "#4a3aa7"];
 const ORPHAN_COLOR = "#9a9890";
